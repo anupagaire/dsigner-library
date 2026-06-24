@@ -1,29 +1,33 @@
-function signForm(ws, options = {}) {
+export function signForm(ws, options = {}) {
   return new Promise((resolve, reject) => {
-
     const { formData } = options;
 
-    // Validate
     if (!formData) return reject(new Error('formData is required'));
 
-    const message = [
-      `action=signForm`,
-      `input={3,"${formData}"}`
-    ].join('\n');
+    const message = `action=signForm\ninput={3,"${formData}"}`;
 
     ws.send(message);
 
     ws.onmessage = (event) => {
       try {
-        const response = JSON.parse(event.data);
-        resolve(response); 
+        const data = JSON.parse(event.data);
+
+        // ✅ Skip connection messages — wait for real result
+        if (data.status === 'connected' || data.message === 'Connection established') {
+          return; // ignore this message, wait for next one
+        }
+
+        resolve(data);
       } catch {
-        resolve(event.data);
+        // Not JSON — check if it's a connection message
+        const raw = event.data;
+        if (raw.toLowerCase().includes('connection established')) {
+          return; // ignore, wait for next message
+        }
+        resolve(raw);
       }
     };
 
-    ws.onerror = (err) => reject(new Error('signForm failed: ' + err.message));
+    ws.onerror = () => reject(new Error('signForm failed'));
   });
 }
-
-module.exports = { signForm };

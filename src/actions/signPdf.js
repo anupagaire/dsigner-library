@@ -1,4 +1,4 @@
-function signPdf(ws, options = {}) {
+export function signPdf(ws, options = {}) {
   return new Promise((resolve, reject) => {
     const {
       input,
@@ -36,9 +36,20 @@ function signPdf(ws, options = {}) {
 
     ws.send(lines.join('\n'));
 
-    ws.on('message', (data) => resolve(data.toString()));
-    ws.on('error',   (err)  => reject(new Error('signPdf failed: ' + err.message)));
+
+ 
+    ws.onmessage = (event) => {
+  const raw = event.data;
+
+
+  if (raw.toLowerCase().includes('connection established')) {
+    return;
+  }
+
+  resolve(raw);
+};
+    ws.onerror   = (err)   => reject(new Error('signPdf failed'));
+
   });
 }
 
-module.exports = { signPdf };

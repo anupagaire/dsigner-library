@@ -1,16 +1,29 @@
 {
   "name": "dsigner-library",
-  "version": "1.0.0",
-  "main": "src/index.js",
-  "description": "Library to interact with dSigner desktop app",
+  "version": "1.2.9",
+  "main": "dist/index.js",
+  "description": "Sign PDFs and Forms using dSigner desktop app",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "rollup -c"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "pdf",
+    "sign",
+    "dsigner",
+    "form"
+  ],
+  "author": "Anupa Gaire",
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "ws": "^8.21.0"
+    "react-pdf": "^10.4.1"
+  },
+  "devDependencies": {
+    "@babel/preset-env": "^7.29.7",
+    "@babel/preset-react": "^7.29.7",
+    "@rollup/plugin-babel": "^7.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "rollup": "^4.60.4",
+    "rollup-plugin-postcss": "^4.0.2"
   }
 }

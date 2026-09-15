@@ -1,12 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import { createClient } from '../client.js';
 import { signPdf } from '../actions/signPdf.js';
 import { signForm } from '../actions/signForm.js';
+import { createClient, getConnection } from '../client.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-
-const SIGNER_PORTS = { dsigner: 8080, emsigner: 1645 };
 
 const INPUT_TYPES = [
   { id: 0, label: 'Base64',    placeholder: 'Paste base64 encoded PDF string...' },
@@ -61,7 +59,7 @@ export function DsignerWidget({
   hideOutput         = false,
   height             = '100vh',
   primaryColor       = '#1a1a1a',
-  pdfConfigs         = {},   // ← NEW: { 0: {pdfInput, outputPath}, 1: {...}, 2: {...} }
+  pdfConfigs         = {},
 }) {
   const [activeTab, setActiveTab]         = useState('pdf');
   const [signer, setSigner]               = useState(defaultSigner);
@@ -93,10 +91,17 @@ export function DsignerWidget({
   const [box, setBox]                     = useState(null);
   const [pdfDimensions, setPdfDimensions] = useState(null);
   const [canvasSize, setCanvasSize]       = useState(null);
+  const [connections, setConnections]     = useState({});
+  const [connectionStatus, setConnectionStatus] = useState('connecting');
+  const [emSignType, setEmSignType]       = useState('detached');
+  const [emCertType, setEmCertType]       = useState('ALL');
+  const [emReason, setEmReason]           = useState('');
+  const [emIssuerName, setEmIssuerName]   = useState('');
+  const [emExpiryCheck, setEmExpiryCheck] = useState('false');
   const containerRef                      = useRef(null);
   const startPos                          = useRef(null);
 
-  // ── Build preview source ──────────────────────────────────────────────────
+  // ── Build preview ─────────────────────────────────────────────────────────
   function buildPreview(val, type) {
     if (!val || !val.trim()) return null;
     if (type === 0) return `data:application/pdf;base64,${val.trim()}`;
@@ -104,7 +109,7 @@ export function DsignerWidget({
     return null;
   }
 
-  // ── On mount — load defaults once ────────────────────────────────────────
+  // ── On mount effects ──────────────────────────────────────────────────────
   useEffect(() => {
     if (defaultPdfInput) {
       const src = buildPreview(defaultPdfInput, defaultInputType);
@@ -112,13 +117,25 @@ export function DsignerWidget({
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Switch input type ─────────────────────────────────────────────────────
+  useEffect(() => {
+    createClient()
+      .then(conns => {
+        setConnections(conns);
+        setConnectionStatus('connected');
+        console.log('Connected:', Object.keys(conns));
+        // [DEBUG] Confirm both signer keys are really present.
+        // If 'emsigner' is missing here, getConnection() has nothing
+        // real to fall back to — that's the first thing to rule out.
+        console.log('[debug] connection keys:', Object.keys(conns), conns);
+      })
+      .catch(() => setConnectionStatus('error'));
+  }, []);
+
+  // ── Type switch ───────────────────────────────────────────────────────────
   function handleTypeSwitch(newType) {
     setInputType(newType);
     setSignedPreview(null);
     setBox(null);
-
-    // If pdfConfigs has data for this type — auto-fill!
     if (pdfConfigs[newType]) {
       const cfg = pdfConfigs[newType];
       const val = cfg.pdfInput || '';
@@ -126,13 +143,12 @@ export function DsignerWidget({
       setOutputPath(cfg.outputPath || outputPath);
       setPreviewSource(buildPreview(val, newType));
     } else {
-      // No config for this type — clear for user to type
       setPdfInput('');
       setPreviewSource(null);
     }
   }
 
-  // ── Page load callbacks ───────────────────────────────────────────────────
+  // ── Page callbacks ────────────────────────────────────────────────────────
   function onPageLoadSuccess(page) {
     setPdfDimensions({ width: page.originalWidth || page.width, height: page.originalHeight || page.height });
     setTimeout(() => {
@@ -199,25 +215,77 @@ export function DsignerWidget({
     setResult(null);
     setSignedPreview(null);
     try {
-      const input = buildInput();
-      if (!input) throw new Error('PDF input is required');
       const finalSignPage = signPage === 'custom' ? customPages.trim() : signPage;
-      const ws = await createClient(`wss://127.0.0.1:${SIGNER_PORTS[signer]}/`);
-      const res = await signPdf(ws, {
-        input,
-        signPage:    finalSignPage,
-        coordinates: coordinates || '400,100,600,200',
-        location:    location || 'Kathmandu',
-        textStamp:   parseInt(textStamp),
-        lastPage:    parseInt(lastPage),
-        stamp:       textStamp === '1' && stampValue ? `{${stampType},"${stampValue}"}` : null,
-        qr:          qrValue || null,
-        qrX:         qrX || null,
-        qrY:         qrY || null,
-        watermark:   watermark || null,
-        outputPath:  outputPath || null,
-      });
-      setTimeout(() => ws.close(), 500);
+      const ws = getConnection(connections, signer);
+      let res;
+
+      if (signer === 'emsigner') {
+        const lines = [
+          `emsigneraction=pdfsign`,
+          `tbs=${pdfInput.trim()}`,
+          `outputpath=${outputPath || ''}`,
+          `signaction=1`,
+          `coordinate=${coordinates}`,
+          `pageno=${finalSignPage}`,
+          `location=${location || 'Kathmandu'}`,
+          `signtype=${emSignType}`,
+          `certtype=${emCertType}`,
+          `expirycheck=${emExpiryCheck}`,
+          `issuername=${emIssuerName}`,
+          `reason=${emReason}`,
+        ];
+
+        // [DEBUG] eMsigner-only diagnostics — does not touch the dsigner path.
+        console.log('[emsigner] socket readyState before send:', ws && ws.readyState);
+        console.log('[emsigner] payload being sent:\n' + lines.join('\n'));
+
+        ws.send(lines.join('\n'));
+        res = await new Promise((resolve, reject) => {
+
+          const timeout= setTimeout(() => {
+            reject(new Error('emsigner dis not reposnd within60s-check if'));
+          },60000
+        );
+          ws.onmessage = (event) => {
+            const raw = event.data;
+            // [DEBUG] See exactly what eMsigner replies with, before any filtering.
+            console.log('[emsigner] raw message received:', JSON.stringify(raw));
+            if (!raw || raw.trim() === '') return;
+            if (raw.toLowerCase().includes('version')) return;
+            clearTimeout(timeout);
+            try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
+          };
+          ws.onerror = () => {
+            clearTimeout(timeout);
+            reject(new Error('eMsigner signPdf failed'));
+};
+        });
+
+        // [FIX] Previously an empty reply from eMsigner silently became a
+        // fake "success" with base64: null. Now it surfaces as a real error
+        // instead, so you can see when eMsigner didn't actually sign anything.
+        if (!res || (typeof res === 'string' && res.trim() === '')) {
+          throw new Error('eMsigner returned an empty response — check that the eMsigner app is running and actually connected.');
+        }
+
+      } else {
+        const input = buildInput();
+        if (!input) throw new Error('PDF input is required');
+        res = await signPdf(ws, {
+          input,
+          signPage:    finalSignPage,
+          coordinates: coordinates || '400,100,600,200',
+          location:    location || 'Kathmandu',
+          textStamp:   parseInt(textStamp),
+          lastPage:    parseInt(lastPage),
+          stamp:       textStamp === '1' && stampValue ? `{${stampType},"${stampValue}"}` : null,
+          qr:          qrValue || null,
+          qrX:         qrX || null,
+          qrY:         qrY || null,
+          watermark:   watermark || null,
+          outputPath:  outputPath || null,
+        });
+      }
 
       let base64Pdf = null;
       try {
@@ -230,6 +298,7 @@ export function DsignerWidget({
       if (base64Pdf) setSignedPreview(`data:application/pdf;base64,${base64Pdf}`);
       setResult({ type: 'success', message: outputPath ? `✓ PDF signed!\nSaved to: ${outputPath}` : '✓ PDF signed successfully!' });
       if (onSigned) onSigned({ status: 'success', message: res, base64: base64Pdf });
+
     } catch (err) {
       setResult({ type: 'error', message: '✗ ' + err.message });
     } finally {
@@ -243,11 +312,56 @@ export function DsignerWidget({
     setResult(null);
     try {
       if (!formData.trim()) throw new Error('Form data is required');
-      const ws = await createClient(`wss://127.0.0.1:${SIGNER_PORTS[signer]}/`);
-      const res = await signForm(ws, { formData: formData.trim() });
-      setTimeout(() => ws.close(), 500);
+      const ws = getConnection(connections, signer);
+      let res;
+
+      if (signer === 'emsigner') {
+        const lines = [
+          `emsigneraction=sign`,
+          `datatosign=${formData.trim()}`,
+          `signaction=sign`,
+          `certtype=${emCertType}`,
+          `expirycheck=${emExpiryCheck}`,
+          `issuername=${emIssuerName}`,
+          `certclass=1|2|3`,
+        ];
+
+        // [DEBUG] Same eMsigner diagnostics as handleSignPdf.
+        console.log('[emsigner] socket readyState before send:', ws && ws.readyState);
+        console.log('[emsigner] payload being sent:\n' + lines.join('\n'));
+
+        ws.send(lines.join('\n'));
+        res = await new Promise((resolve, reject) => {
+           const timeout= setTimeout(() => {
+            reject(new Error('emsigner dis not reposnd within60s-check if'));
+          },60000
+        );
+          ws.onmessage = (event) => {
+            const raw = event.data;
+            console.log('[emsigner] raw message received:', JSON.stringify(raw));
+            if (!raw || raw.trim() === '') return;
+             if (raw.toLowerCase().includes('version')) return;
+            clearTimeout(timeout);
+            try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
+          };
+          ws.onerror = () =>
+            {
+              clearTimeout(timeout);
+            reject(new Error('eMsigner signForm failed'));
+            };
+        });
+
+        // [FIX] Same empty-response guard as handleSignPdf.
+        if (!res || (typeof res === 'string' && res.trim() === '')) {
+          throw new Error('eMsigner returned an empty response — check that the eMsigner app is running and actually connected.');
+        }
+      } else {
+        res = await signForm(ws, { formData: formData.trim() });
+      }
+
       setResult({ type: 'success', message: '✓ Form signed!\n\nStatus: ' + (res.status || '') });
       if (onSigned) onSigned({ status: res.status || 'success', message: res.message || res });
+
     } catch (err) {
       setResult({ type: 'error', message: '✗ ' + err.message });
     } finally {
@@ -257,17 +371,25 @@ export function DsignerWidget({
 
   const activePdf = signedPreview || previewSource;
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={{ display: 'flex', height, fontFamily: "'DM Sans', system-ui, sans-serif", background: '#f5f4f0', overflow: 'hidden' }}>
 
       {/* ── LEFT panel ── */}
       <div style={{ width: 320, flexShrink: 0, background: '#fff', borderRight: '1px solid #ece9e2', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
+        {/* Header */}
         <div style={{ padding: '14px 16px', borderBottom: '1px solid #ece9e2', flexShrink: 0 }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: '#1a1a1a', letterSpacing: '-0.5px' }}>dSigner</div>
           <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>Sign PDFs and forms via dSigner / eMsigner</div>
+          <div style={{ fontSize: 10, marginTop: 4, color: connectionStatus === 'connected' ? '#1a7a3a' : connectionStatus === 'error' ? '#d04040' : '#888' }}>
+            {connectionStatus === 'connecting' && '⏳ Connecting...'}
+            {connectionStatus === 'connected'  && `✅ ${Object.keys(connections).join(' & ')} connected`}
+            {connectionStatus === 'error'      && '❌ Could not connect — is dSigner/eMsigner open?'}
+          </div>
         </div>
 
+        {/* Tabs */}
         <div style={{ display: 'flex', gap: 5, padding: '10px 12px', background: '#f5f4f0', flexShrink: 0 }}>
           {['pdf', 'form'].map(tab => (
             <button key={tab}
@@ -278,8 +400,10 @@ export function DsignerWidget({
           ))}
         </div>
 
+        {/* Scrollable form */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
 
+          {/* Signer selector */}
           <div style={sectionLabel}>Signer</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 14 }}>
             {['dsigner', 'emsigner'].map(s => (
@@ -289,6 +413,7 @@ export function DsignerWidget({
             ))}
           </div>
 
+          {/* ── PDF Tab ── */}
           {activeTab === 'pdf' && (
             <>
               <div style={sectionLabel}>Input type</div>
@@ -347,27 +472,56 @@ export function DsignerWidget({
                 <input style={inp} value={location} onChange={e => setLocation(e.target.value)} placeholder="Kathmandu" />
               </Field>
 
-              <Field label="Stamp type" required>
-                <select style={inp} value={textStamp} onChange={e => setTextStamp(e.target.value)}>
-                  <option value="0">Text stamp</option>
-                  <option value="1">Image stamp</option>
-                </select>
-              </Field>
-
-              {textStamp === '1' && (
+              {/* ── dSigner only fields ── */}
+              {signer === 'dsigner' && (
                 <>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 5, marginBottom: 8 }}>
-                    {STAMP_TYPES.map(t => (
-                      <button key={t.id} style={typeBtn(stampType === t.id)} onClick={() => setStampType(t.id)}>{t.label}</button>
-                    ))}
-                  </div>
-                  <Field label="Stamp value" required>
-                    <input style={inp} value={stampValue} onChange={e => setStampValue(e.target.value)}
-                      placeholder={STAMP_TYPES.find(t => t.id === stampType)?.placeholder} />
+                  <Field label="Stamp type" required>
+                    <select style={inp} value={textStamp} onChange={e => setTextStamp(e.target.value)}>
+                      <option value="0">Text stamp</option>
+                      <option value="1">Image stamp</option>
+                    </select>
+                  </Field>
+
+                  {textStamp === '1' && (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 5, marginBottom: 8 }}>
+                        {STAMP_TYPES.map(t => (
+                          <button key={t.id} style={typeBtn(stampType === t.id)} onClick={() => setStampType(t.id)}>{t.label}</button>
+                        ))}
+                      </div>
+                      <Field label="Stamp value" required>
+                        <input style={inp} value={stampValue} onChange={e => setStampValue(e.target.value)}
+                          placeholder={STAMP_TYPES.find(t => t.id === stampType)?.placeholder} />
+                      </Field>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* ── eMsigner only fields ── */}
+              {signer === 'emsigner' && (
+                <>
+                  <Field label="Sign type">
+                    <select style={inp} value={emSignType} onChange={e => setEmSignType(e.target.value)}>
+                      <option value="detached">Detached</option>
+                      <option value="attached">Attached</option>
+                    </select>
+                  </Field>
+
+                  <Field label="Cert type">
+                    <select style={inp} value={emCertType} onChange={e => setEmCertType(e.target.value)}>
+                      <option value="ALL">ALL</option>
+                      <option value="DSC">DSC</option>
+                    </select>
+                  </Field>
+
+                  <Field label="Reason">
+                    <input style={inp} value={emReason} onChange={e => setEmReason(e.target.value)} placeholder="e.g. test" />
                   </Field>
                 </>
               )}
 
+              {/* Optional params toggle */}
               <button style={{ background: 'none', border: 'none', color: '#888', fontSize: 11, cursor: 'pointer', padding: '4px 0 8px', fontFamily: 'inherit' }}
                 onClick={() => setShowOptional(v => !v)}>
                 {showOptional ? '▲ Hide' : '▼ Show'} optional parameters
@@ -380,36 +534,59 @@ export function DsignerWidget({
                       <input style={inp} value={outputPath} onChange={e => setOutputPath(e.target.value)} placeholder="/Users/you/signed.pdf" />
                     </Field>
                   )}
-                  <Field label="QR code">
-                    <input style={inp} value={qrValue} onChange={e => setQrValue(e.target.value)} placeholder='{2,"https://example.com/qr.png"}' />
-                  </Field>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    <Field label="QR X"><input style={inp} value={qrX} onChange={e => setQrX(e.target.value)} placeholder="90" /></Field>
-                    <Field label="QR Y"><input style={inp} value={qrY} onChange={e => setQrY(e.target.value)} placeholder="90" /></Field>
-                  </div>
-                  <Field label="Watermark">
-                    <input style={inp} value={watermark} onChange={e => setWatermark(e.target.value)} placeholder="watermark text" />
-                  </Field>
-                  <Field label="Last page">
-                    <select style={inp} value={lastPage} onChange={e => setLastPage(e.target.value)}>
-                      <option value="0">No extra last page</option>
-                      <option value="1">Add last page</option>
-                    </select>
-                  </Field>
+
+                  {/* dSigner optional */}
+                  {signer === 'dsigner' && (
+                    <>
+                      <Field label="QR code">
+                        <input style={inp} value={qrValue} onChange={e => setQrValue(e.target.value)} placeholder='{2,"https://example.com/qr.png"}' />
+                      </Field>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <Field label="QR X"><input style={inp} value={qrX} onChange={e => setQrX(e.target.value)} placeholder="90" /></Field>
+                        <Field label="QR Y"><input style={inp} value={qrY} onChange={e => setQrY(e.target.value)} placeholder="90" /></Field>
+                      </div>
+                      <Field label="Watermark">
+                        <input style={inp} value={watermark} onChange={e => setWatermark(e.target.value)} placeholder="watermark text" />
+                      </Field>
+                      <Field label="Last page">
+                        <select style={inp} value={lastPage} onChange={e => setLastPage(e.target.value)}>
+                          <option value="0">No extra last page</option>
+                          <option value="1">Add last page</option>
+                        </select>
+                      </Field>
+                    </>
+                  )}
+
+                  {/* eMsigner optional */}
+                  {signer === 'emsigner' && (
+                    <>
+                      <Field label="Issuer name">
+                        <input style={inp} value={emIssuerName} onChange={e => setEmIssuerName(e.target.value)} placeholder="optional" />
+                      </Field>
+                      <Field label="Expiry check">
+                        <select style={inp} value={emExpiryCheck} onChange={e => setEmExpiryCheck(e.target.value)}>
+                          <option value="false">false</option>
+                          <option value="true">true</option>
+                        </select>
+                      </Field>
+                    </>
+                  )}
                 </div>
               )}
             </>
           )}
 
+          {/* ── Form Tab ── */}
           {activeTab === 'form' && (
             <Field label="Form data" required>
               <textarea
                 style={{ ...inp, minHeight: 80, resize: 'vertical', fontFamily: 'monospace', fontSize: 11 }}
                 value={formData} onChange={e => setFormData(e.target.value)}
-                placeholder="name='Hari'|class=8|roll=1" />
+                placeholder={signer === 'emsigner' ? 'base64 encoded data...' : "name='Hari'|class=8|roll=1"} />
             </Field>
           )}
 
+          {/* Result */}
           {result && (
             <div style={{ marginTop: 12, padding: 10, borderRadius: 8, fontSize: 11, fontFamily: 'monospace', wordBreak: 'break-all', whiteSpace: 'pre-wrap', background: result.type === 'success' ? '#f0fff4' : '#fff0f0', color: result.type === 'success' ? '#1a7a3a' : '#d04040', border: `1px solid ${result.type === 'success' ? '#b8f0cc' : '#f5c0c0'}` }}>
               {result.message}
@@ -417,6 +594,7 @@ export function DsignerWidget({
           )}
         </div>
 
+        {/* Sign button */}
         <div style={{ padding: '12px 16px', borderTop: '1px solid #ece9e2', flexShrink: 0 }}>
           <button
             style={{ width: '100%', padding: 12, borderRadius: 10, border: 'none', background: loading ? '#888' : primaryColor, color: '#fff', fontSize: 14, fontWeight: 500, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: 'inherit', transition: 'background 0.15s' }}
@@ -466,11 +644,11 @@ export function DsignerWidget({
               onMouseMove={onMouseMove}
               onMouseUp={onMouseUp}
             >
-<Document
-  file={activePdf}
-  onLoadSuccess={({ numPages }) => { setNumPages(numPages); setCurrentPage(1); }}
-  style={{ display: 'block' }}
->
+              <Document
+                file={activePdf}
+                onLoadSuccess={({ numPages }) => { setNumPages(numPages); setCurrentPage(1); }}
+                style={{ display: 'block' }}
+              >
                 <Page
                   pageNumber={currentPage}
                   width={Math.min(700, window.innerWidth - 360)}

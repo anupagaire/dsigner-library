@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test 1 — Headless sign() API</title>
+  <style>
+    body {
+      font-family: 'DM Sans', system-ui, sans-serif;
+      background: #f5f4f0;
+      margin: 0;
+      padding: 40px;
+      display: flex;
+      justify-content: center;
+    }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 28px;
+      width: 420px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    }
+    h2 { margin: 0 0 4px; font-size: 20px; }
+    .sub { color: #888; font-size: 13px; margin-bottom: 20px; }
+
+    label { font-size: 12px; font-weight: 600; color: #555; display: block; margin: 14px 0 6px; }
+    input {
+      width: 100%; padding: 9px 10px; border-radius: 8px;
+      border: 1px solid #ece9e2; font-size: 13px; box-sizing: border-box;
+      font-family: inherit;
+    }
+
+    .signer-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 6px; }
+    .signer-choice button {
+      padding: 10px; border-radius: 8px; border: 1px solid #ece9e2;
+      background: #fff; color: #888; font-size: 13px; cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    .signer-choice button.active {
+      border: 2px solid #1a1a1a; background: #1a1a1a; color: #fff; font-weight: 500;
+    }
+
+    .sign-btn {
+      width: 100%; margin-top: 20px; padding: 12px; border-radius: 10px;
+      border: none; background: #1a1a1a; color: #fff; font-size: 14px;
+      font-weight: 500; cursor: pointer; font-family: inherit;
+    }
+    .sign-btn:disabled { background: #aaa; cursor: not-allowed; }
+
+    .result {
+      margin-top: 16px; padding: 10px; border-radius: 8px; font-size: 12px;
+      font-family: monospace; white-space: pre-wrap; word-break: break-all; display: none;
+    }
+    .result.success { display: block; background: #f0fff4; color: #1a7a3a; border: 1px solid #b8f0cc; }
+    .result.error   { display: block; background: #fff0f0; color: #d04040; border: 1px solid #f5c0c0; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>1️⃣ Headless sign() API</h2>
+    <div class="sub">No widget UI — direct function call, like a normal API. Websocket handled internally.</div>
+
+    <label>Signer</label>
+    <div class="signer-choice">
+      <button id="btnDsigner" class="active">dSigner</button>
+      <button id="btnEmsigner">eMsigner</button>
+    </div>
+
+    <label>PDF file path (tbs)</label>
+    <input id="tbsInput" value="/Users/anupagaire/Documents/abc.pdf" />
+
+    <label>Coordinates</label>
+    <input id="coordInput" value="400,100,600,200" />
+
+    <button class="sign-btn" id="signBtn">Sign PDF</button>
+
+    <div id="resultBox" class="result"></div>
+  </div>
+
+  <script src="dist/dsigner-widget.umd.js"></script>
+  <script>
+    let selectedSigner = 'dsigner';
+
+    const btnDsigner  = document.getElementById('btnDsigner');
+    const btnEmsigner = document.getElementById('btnEmsigner');
+    const signBtn     = document.getElementById('signBtn');
+    const resultBox    = document.getElementById('resultBox');
+
+    btnDsigner.addEventListener('click', () => {
+      selectedSigner = 'dsigner';
+      btnDsigner.classList.add('active');
+      btnEmsigner.classList.remove('active');
+    });
+
+    btnEmsigner.addEventListener('click', () => {
+      selectedSigner = 'emsigner';
+      btnEmsigner.classList.add('active');
+      btnDsigner.classList.remove('active');
+    });
+
+    signBtn.addEventListener('click', async () => {
+      const tbs   = document.getElementById('tbsInput').value.trim();
+      const coord = document.getElementById('coordInput').value.trim();
+
+      resultBox.className = 'result';
+      resultBox.textContent = '';
+      signBtn.disabled = true;
+      signBtn.textContent = 'Signing...';
+
+      try {
+        const result = await DsignerWidgets.sign({
+          signer: selectedSigner,
+          tbs: tbs,
+          coordinate: coord,
+        });
+        resultBox.className = 'result success';
+        resultBox.textContent = '✓ Signed successfully!\n\n' + JSON.stringify(result, null, 2);
+        console.log('Signed:', result);
+      } catch (err) {
+        resultBox.className = 'result error';
+        resultBox.textContent = '✗ ' + err.message;
+        console.error('Sign failed:', err);
+      } finally {
+        signBtn.disabled = false;
+        signBtn.textContent = 'Sign PDF';
+      }
+    });
+
+    console.log('Available functions:', DsignerWidgets);
+  </script>
+
+</body>
+</html>

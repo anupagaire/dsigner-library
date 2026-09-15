@@ -1,6 +1,6 @@
 {
   "name": "dsigner-library",
-  "version": "1.2.9",
+  "version": "1.4.4",
   "main": "dist/index.js",
   "description": "Sign PDFs and Forms using dSigner desktop app",
   "scripts": {
@@ -16,6 +16,9 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@rollup/plugin-commonjs": "^29.0.3",
+    "nepali-date-converter": "^3.4.0",
+    "react-dom": "^19.2.7",
     "react-pdf": "^10.4.1"
   },
   "devDependencies": {
@@ -23,6 +26,8 @@
     "@babel/preset-react": "^7.29.7",
     "@rollup/plugin-babel": "^7.1.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-replace": "^6.0.3",
+    "@rollup/plugin-terser": "^1.0.0",
     "rollup": "^4.60.4",
     "rollup-plugin-postcss": "^4.0.2"
   }

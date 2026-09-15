@@ -1,4 +1,5 @@
 export function signPdf(ws, options = {}) {
+
   return new Promise((resolve, reject) => {
     const {
       input,
@@ -35,8 +36,6 @@ export function signPdf(ws, options = {}) {
     if (outputPath) lines.push(`output={"${outputPath}"}`);
 
     ws.send(lines.join('\n'));
-
-
  
     ws.onmessage = (event) => {
   const raw = event.data;

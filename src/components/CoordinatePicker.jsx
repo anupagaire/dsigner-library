@@ -26,8 +26,6 @@ export function CoordinatePicker({ pdfSource, onSelect, onClose, width = 420 }) 
   const containerRef = useRef(null);
   const startPos     = useRef(null);
 
-  // ── Page loaded — get real PDF dimensions ─────────────────────────────────
-
   function onPageLoadSuccess(page) {
     setPdfDimensions({
       width:  page.originalWidth  || page.width,
@@ -73,7 +71,6 @@ export function CoordinatePicker({ pdfSource, onSelect, onClose, width = 420 }) 
 
   function onMouseUp() { setDrawing(false); }
 
-  // ── Convert px → PDF coordinates ─────────────────────────────────────────
 
   function handleGetCoords() {
     if (!box || box.w < 5 || box.h < 5) { alert('Draw a box on the PDF first!'); return; }

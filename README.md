@@ -1,17 +1,10 @@
 # dsigner-library
-
+<script src="https://unpkg.com/dsigner-library/dist/dsigner-widget.umd.js"></script>
 A simple JavaScript library to sign PDFs and Forms using the **dSigner** desktop application via WebSocket.
 
----
 // Users add this in their App.js or index.js
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-## Requirements
-
-- [dSigner](https://www.dsigner.com) desktop app must be installed and running on your machine
-- Node.js 14 or higher
-
----
 
 ## Installation
 
@@ -236,3 +229,21 @@ try {
 ## License
 
 MIT
+
+
+
+
+
+<div id="dsigner-root" style="height: 100vh;"></div>
+
+<script src="https://unpkg.com/dsigner-library@1.3.7/dist/dsigner-widget.umd.js"></script>
+<script>
+  DsignerWidgets.mount('#dsigner-root', {
+    defaultSigner: 'dsigner',        // ya 'emsigner'
+    defaultInputType: 1,              // 0=Base64, 1=File path, 2=URL
+    defaultPdfInput: '/path/to/your/file.pdf',
+    onSigned: function(result) {
+      console.log('Signed!', result);
+    }
+  });
+</script>
